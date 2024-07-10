@@ -440,3 +440,4 @@ websocket-client==1.7.0
     # via
     #   -r requirements/pip.txt
     #   docker
+zipp>=3.19.1 # not directly required, pinned by Snyk to avoid a vulnerability
