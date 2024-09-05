@@ -63,7 +63,7 @@ dj-pagination==2.5.0
     # via -r requirements/pip.in
 dj-stripe==2.6.3
     # via -r requirements/pip.in
-django==4.2.11
+django==4.2.16
     # via
     #   -r requirements/pip.in
     #   dj-stripe
@@ -314,3 +314,4 @@ websocket-client==1.7.0
 
 # The following packages are considered to be unsafe in a requirements file:
 # pip
+setuptools>=70.0.0 # not directly required, pinned by Snyk to avoid a vulnerability
