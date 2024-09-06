@@ -80,7 +80,7 @@ cron-descriptor==1.4.3
     # via
     #   -r requirements/pip.txt
     #   django-celery-beat
-cryptography==42.0.5
+cryptography==43.0.1
     # via
     #   -r requirements/pip.txt
     #   pyjwt
@@ -102,7 +102,7 @@ dj-pagination==2.5.0
     # via -r requirements/pip.txt
 dj-stripe==2.6.3
     # via -r requirements/pip.txt
-django==4.2.11
+django==4.2.16
     # via
     #   -r requirements/pip.txt
     #   dj-stripe
