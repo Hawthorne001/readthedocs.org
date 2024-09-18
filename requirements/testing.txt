@@ -103,7 +103,7 @@ dj-pagination==2.5.0
     # via -r requirements/pip.txt
 dj-stripe==2.6.3
     # via -r requirements/pip.txt
-django==4.2.11
+django==4.2.16
     # via
     #   -r requirements/pip.txt
     #   dj-stripe
@@ -467,3 +467,4 @@ websocket-client==1.7.0
     #   docker
 yamale==2.2.0
     # via -r requirements/testing.in
+setuptools>=70.0.0 # not directly required, pinned by Snyk to avoid a vulnerability
