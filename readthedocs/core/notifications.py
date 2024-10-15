@@ -17,7 +17,7 @@ messages = [
             textwrap.dedent(
                 """
             Your primary email address is not verified.
-            Please <a href="{{account_email_url}}">verify it here</a>.
+            Please <a href="{% url 'account_email' %}">verify it here</a>.
             """
             ).strip(),
         ),
@@ -35,7 +35,7 @@ messages = [
                 Feel free to <a href="https://{{ PRODUCTION_DOMAIN }}/support/">report any feedback</a> you may have.
                 {% else %}
                 Our new <strong>beta dashboard</strong> is now available for testing.
-                <a href="https://beta.{{ PRODUCTION_DOMAIN }}/">Give it a try</a> and send us feedback.
+                <a href="https://app.{{ PRODUCTION_DOMAIN }}/">Give it a try</a> and send us feedback.
                 {% endif %}
             """
             ).strip(),

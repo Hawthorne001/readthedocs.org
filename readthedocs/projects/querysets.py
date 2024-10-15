@@ -3,12 +3,13 @@ from django.db import models
 from django.db.models import Count, OuterRef, Prefetch, Q, Subquery
 
 from readthedocs.core.permissions import AdminPermission
+from readthedocs.core.querysets import NoReprQuerySet
 from readthedocs.core.utils.extend import SettingsOverrideObject
 from readthedocs.projects import constants
 from readthedocs.subscriptions.products import get_feature
 
 
-class ProjectQuerySetBase(models.QuerySet):
+class ProjectQuerySetBase(NoReprQuerySet, models.QuerySet):
 
     """Projects take into account their own privacy_level setting."""
 
@@ -147,7 +148,10 @@ class ProjectQuerySetBase(models.QuerySet):
 
     def dashboard(self, user):
         """Get the projects for this user including the latest build."""
-        return self.for_user(user).prefetch_latest_build()
+        # Prefetching seems to cause some inconsistent performance issues,
+        # disabling for now. For more background, see:
+        # https://github.com/readthedocs/readthedocs.org/pull/11621
+        return self.for_user(user)
 
     def api(self, user=None):
         return self.public(user)
@@ -169,7 +173,7 @@ class ProjectQuerySet(SettingsOverrideObject):
     _default_class = ProjectQuerySetBase
 
 
-class RelatedProjectQuerySet(models.QuerySet):
+class RelatedProjectQuerySet(NoReprQuerySet, models.QuerySet):
 
     """
     Useful for objects that relate to Project and its permissions.
@@ -220,7 +224,7 @@ class ChildRelatedProjectQuerySet(RelatedProjectQuerySet):
     use_for_related_fields = True
 
 
-class FeatureQuerySet(models.QuerySet):
+class FeatureQuerySet(NoReprQuerySet, models.QuerySet):
     use_for_related_fields = True
 
     def for_project(self, project):

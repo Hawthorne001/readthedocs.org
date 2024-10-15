@@ -17,10 +17,12 @@ from requests.utils import quote
 from readthedocs.builds.constants import BUILD_FINAL_STATES
 from readthedocs.builds.filters import BuildListFilter
 from readthedocs.builds.models import Build, Version
+from readthedocs.core.filters import FilterContextMixin
 from readthedocs.core.permissions import AdminPermission
 from readthedocs.core.utils import cancel_build, trigger_build
 from readthedocs.doc_builder.exceptions import BuildAppError
 from readthedocs.projects.models import Project
+from readthedocs.projects.views.base import ProjectSpamMixin
 
 log = structlog.get_logger(__name__)
 
@@ -42,6 +44,9 @@ class BuildBase:
         return queryset
 
 
+# TODO this class and views that extend this class can be removed when the old
+# dashboard goes away and RTD_EXT_THEME_ENABLED is removed. Instead of using a
+# hidden form on views, the new dashboard uses APIv3 to trigger new builds.
 class BuildTriggerMixin:
     @method_decorator(login_required)
     def post(self, request, project_slug):
@@ -120,7 +125,20 @@ class BuildTriggerMixin:
         )
 
 
-class BuildList(BuildBase, BuildTriggerMixin, ListView):
+class BuildList(
+    FilterContextMixin,
+    ProjectSpamMixin,
+    BuildBase,
+    BuildTriggerMixin,
+    ListView,
+):
+    filterset_class = BuildListFilter
+
+    def get_project(self):
+        # Call ``.get_queryset()`` to get the current project from ``kwargs``
+        self.get_queryset()
+        return self.project
+
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
 
@@ -138,16 +156,21 @@ class BuildList(BuildBase, BuildTriggerMixin, ListView):
 
         builds = self.get_queryset()
         if settings.RTD_EXT_THEME_ENABLED:
-            filter = BuildListFilter(self.request.GET, queryset=builds)
-            context["filter"] = filter
-            builds = filter.qs
+            context["filter"] = self.get_filterset(
+                queryset=builds,
+                project=self.project,
+            )
+            builds = self.get_filtered_queryset()
         context["build_qs"] = builds
 
         return context
 
 
-class BuildDetail(BuildBase, DetailView):
+class BuildDetail(BuildBase, ProjectSpamMixin, DetailView):
     pk_url_kwarg = "build_pk"
+
+    def get_project(self):
+        return self.get_object().project
 
     @method_decorator(login_required)
     def post(self, request, project_slug, build_pk):
@@ -178,10 +201,10 @@ class BuildDetail(BuildBase, DetailView):
         # On community, we _don't want this_ as this requires the user to have
         # a login to view the new dashboard.
         url_domain = settings.PRODUCTION_DOMAIN
-        if url_domain.startswith("beta."):
-            url_domain = url_domain[5:]
+        if url_domain.startswith("app."):
+            url_domain = url_domain[4:]
         else:
-            url_domain = f"beta.{url_domain}"
+            url_domain = f"app.{url_domain}"
         url_build = build.get_absolute_url()
         # Point to the login view with the build as ?next. We are expecting
         # users to have accounts to view this.

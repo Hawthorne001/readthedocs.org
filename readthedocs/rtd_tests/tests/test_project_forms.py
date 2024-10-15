@@ -1,6 +1,7 @@
 from unittest import mock
 
 from allauth.socialaccount.models import SocialAccount
+from allauth.socialaccount.providers.github.provider import GitHubProvider
 from django.contrib.auth.models import User
 from django.core.exceptions import NON_FIELD_ERRORS
 from django.test import TestCase
@@ -10,6 +11,7 @@ from django_dynamic_fixture import get
 from readthedocs.builds.constants import EXTERNAL, LATEST, STABLE
 from readthedocs.builds.models import Version
 from readthedocs.core.forms import RichValidationError
+from readthedocs.oauth.models import RemoteRepository, RemoteRepositoryRelation
 from readthedocs.organizations.models import Organization, Team
 from readthedocs.projects.constants import (
     ADDONS_FLYOUT_SORTING_CALVER,
@@ -18,8 +20,6 @@ from readthedocs.projects.constants import (
     MULTIPLE_VERSIONS_WITHOUT_TRANSLATIONS,
     PRIVATE,
     PUBLIC,
-    REPO_TYPE_GIT,
-    REPO_TYPE_HG,
     SINGLE_VERSION_WITHOUT_TRANSLATIONS,
     SPHINX,
 )
@@ -113,29 +113,6 @@ class TestProjectForms(TestCase):
         self.assertFalse(form.is_valid())
         self.assertIn("name", form.errors)
 
-    def test_changing_vcs_should_not_change_latest_is_not_none(self):
-        """
-        When changing the project's VCS,
-        we should respect the custom default branch.
-        """
-        project = get(Project, repo_type=REPO_TYPE_HG, default_branch="custom")
-        latest = project.versions.get(slug=LATEST)
-        self.assertEqual(latest.identifier, "custom")
-
-        form = ProjectBasicsForm(
-            {
-                "repo": "http://github.com/test/test",
-                "name": "name",
-                "repo_type": REPO_TYPE_GIT,
-                "language": "en",
-            },
-            instance=project,
-        )
-        self.assertTrue(form.is_valid())
-        form.save()
-        latest.refresh_from_db()
-        self.assertEqual(latest.identifier, "custom")
-
     @override_settings(ALLOW_PRIVATE_REPOS=False)
     def test_length_of_tags(self):
         project = get(Project)
@@ -180,7 +157,8 @@ class TestProjectForms(TestCase):
 
 class TestProjectAdvancedForm(TestCase):
     def setUp(self):
-        self.project = get(Project, privacy_level=PUBLIC)
+        self.user = get(User)
+        self.project = get(Project, privacy_level=PUBLIC, users=[self.user])
         get(
             Version,
             project=self.project,
@@ -357,6 +335,55 @@ class TestProjectAdvancedForm(TestCase):
             version=default_branch,
         )
 
+    def test_set_remote_repository(self):
+        data = {
+            "name": "Project",
+            "repo": "https://github.com/readthedocs/readthedocs.org/",
+            "repo_type": self.project.repo_type,
+            "default_version": LATEST,
+            "language": self.project.language,
+            "versioning_scheme": self.project.versioning_scheme,
+        }
+
+        remote_repository = get(
+            RemoteRepository,
+            full_name="rtfd/template",
+            clone_url="https://github.com/rtfd/template",
+            html_url="https://github.com/rtfd/template",
+            ssh_url="git@github.com:rtfd/template.git",
+            private=False,
+        )
+
+        # No remote repository attached.
+        form = UpdateProjectForm(data, instance=self.project, user=self.user)
+        self.assertTrue(form.is_valid())
+
+        # Remote repository attached, but it doesn't belong to the user.
+        data["remote_repository"] = remote_repository.pk
+        form = UpdateProjectForm(data, instance=self.project, user=self.user)
+        self.assertFalse(form.is_valid())
+        self.assertIn("remote_repository", form.errors)
+
+        # Remote repository attached, it belongs to the user now.
+        remote_repository_rel = get(
+            RemoteRepositoryRelation,
+            remote_repository=remote_repository,
+            user=self.user,
+            admin=True,
+        )
+        data["remote_repository"] = remote_repository.pk
+        form = UpdateProjectForm(data, instance=self.project, user=self.user)
+        self.assertTrue(form.is_valid())
+
+        # The project has the remote repository attached.
+        # And the user doesn't have access to it anymore, but still can use it.
+        self.project.remote_repository = remote_repository
+        self.project.save()
+        remote_repository_rel.delete()
+        data["remote_repository"] = remote_repository.pk
+        form = UpdateProjectForm(data, instance=self.project, user=self.user)
+        self.assertTrue(form.is_valid())
+
 
 class TestProjectAdvancedFormDefaultBranch(TestCase):
     def setUp(self):
@@ -501,7 +528,9 @@ class TestProjectPrevalidationForms(TestCase):
         # User with connection
         # User without connection
         self.user_github = get(User)
-        self.social_github = get(SocialAccount, user=self.user_github)
+        self.social_github = get(
+            SocialAccount, user=self.user_github, provider=GitHubProvider.id
+        )
         self.user_email = get(User)
 
     def test_form_prevalidation_email_user(self):
@@ -537,11 +566,17 @@ class TestProjectPrevalidationForms(TestCase):
 class TestProjectPrevalidationFormsWithOrganizations(TestCase):
     def setUp(self):
         self.user_owner = get(User)
-        self.social_owner = get(SocialAccount, user=self.user_owner)
+        self.social_owner = get(
+            SocialAccount, user=self.user_owner, provider=GitHubProvider.id
+        )
         self.user_admin = get(User)
-        self.social_admin = get(SocialAccount, user=self.user_admin)
+        self.social_admin = get(
+            SocialAccount, user=self.user_admin, provider=GitHubProvider.id
+        )
         self.user_readonly = get(User)
-        self.social_readonly = get(SocialAccount, user=self.user_readonly)
+        self.social_readonly = get(
+            SocialAccount, user=self.user_readonly, provider=GitHubProvider.id
+        )
 
         self.organization = get(
             Organization,

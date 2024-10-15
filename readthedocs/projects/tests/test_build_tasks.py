@@ -1,11 +1,14 @@
 import os
 import pathlib
 import textwrap
+import uuid
+from pathlib import Path
 from unittest import mock
 
 import django_dynamic_fixture as fixture
 import pytest
 from django.conf import settings
+from django.test.utils import override_settings
 
 from readthedocs.builds.constants import (
     BUILD_STATUS_FAILURE,
@@ -260,6 +263,7 @@ class TestBuildTask(BuildEnvironmentBase):
 
         build_docs_class.assert_called_once_with("mkdocs")  # HTML builder
 
+    @override_settings(DOCROOT="/tmp/readthedocs-tests/git-repository/")
     @mock.patch("readthedocs.doc_builder.director.load_yaml_config")
     def test_build_updates_documentation_type(self, load_yaml_config):
         assert self.version.documentation_type == "sphinx"
@@ -361,12 +365,16 @@ class TestBuildTask(BuildEnvironmentBase):
             "READTHEDOCS_VERSION_NAME": self.version.verbose_name,
             "READTHEDOCS_PROJECT": self.project.slug,
             "READTHEDOCS_LANGUAGE": self.project.language,
+            "READTHEDOCS_REPOSITORY_PATH": os.path.join(
+                self.project.checkout_path(self.version.slug),
+            ),
             "READTHEDOCS_OUTPUT": os.path.join(
                 self.project.checkout_path(self.version.slug), "_readthedocs/"
             ),
             "READTHEDOCS_GIT_CLONE_URL": self.project.repo,
             "READTHEDOCS_GIT_IDENTIFIER": self.version.identifier,
             "READTHEDOCS_GIT_COMMIT_HASH": self.build.commit,
+            "READTHEDOCS_PRODUCTION_DOMAIN": settings.PRODUCTION_DOMAIN,
         }
 
         self._trigger_update_docs_task()
@@ -399,6 +407,8 @@ class TestBuildTask(BuildEnvironmentBase):
             expected_build_env_vars["PRIVATE_TOKEN"] = "a1b2c3"
         assert build_env_vars == expected_build_env_vars
 
+    @override_settings(DOCROOT="/tmp/readthedocs-tests/git-repository/")
+    @mock.patch("readthedocs.projects.tasks.builds.shutil")
     @mock.patch("readthedocs.projects.tasks.builds.index_build")
     @mock.patch("readthedocs.projects.tasks.builds.build_complete")
     @mock.patch("readthedocs.projects.tasks.builds.send_external_build_status")
@@ -413,6 +423,7 @@ class TestBuildTask(BuildEnvironmentBase):
         send_external_build_status,
         build_complete,
         index_build,
+        shutilmock,
     ):
         load_yaml_config.return_value = get_build_config(
             {
@@ -429,12 +440,16 @@ class TestBuildTask(BuildEnvironmentBase):
         # Create the artifact paths, so it's detected by the builder
         os.makedirs(self.project.artifact_path(version=self.version.slug, type_="html"))
         os.makedirs(self.project.artifact_path(version=self.version.slug, type_="json"))
+        filename = str(uuid.uuid4())
         for f in ("htmlzip", "epub", "pdf"):
+            extension = "zip" if f == "htmlzip" else f
             os.makedirs(self.project.artifact_path(version=self.version.slug, type_=f))
             pathlib.Path(
                 os.path.join(
                     self.project.artifact_path(version=self.version.slug, type_=f),
-                    f"{self.project.slug}.{f}",
+                    # Use a random name for the offline format.
+                    # We will automatically rename this file to filename El Proxito expects.
+                    f"{filename}.{extension}",
                 )
             ).touch()
 
@@ -447,6 +462,36 @@ class TestBuildTask(BuildEnvironmentBase):
         ).touch()
 
         self._trigger_update_docs_task()
+
+        # Offline formats were renamed to the correct filename.
+        shutilmock.move.assert_has_calls(
+            [
+                mock.call(
+                    Path(
+                        f"/tmp/readthedocs-tests/git-repository/_readthedocs/htmlzip/{filename}.zip"
+                    ),
+                    Path(
+                        f"/tmp/readthedocs-tests/git-repository/_readthedocs/htmlzip/{self.project.slug}.zip"
+                    ),
+                ),
+                mock.call(
+                    Path(
+                        f"/tmp/readthedocs-tests/git-repository/_readthedocs/pdf/{filename}.pdf"
+                    ),
+                    Path(
+                        f"/tmp/readthedocs-tests/git-repository/_readthedocs/pdf/{self.project.slug}.pdf"
+                    ),
+                ),
+                mock.call(
+                    Path(
+                        f"/tmp/readthedocs-tests/git-repository/_readthedocs/epub/{filename}.epub"
+                    ),
+                    Path(
+                        f"/tmp/readthedocs-tests/git-repository/_readthedocs/epub/{self.project.slug}.epub"
+                    ),
+                ),
+            ]
+        )
 
         # It has to be called twice, ``before_start`` and ``after_return``
         clean_build.assert_has_calls(
@@ -490,8 +535,11 @@ class TestBuildTask(BuildEnvironmentBase):
             "builder": mock.ANY,
         }
 
+        # NOTE: `request_history[5]` is a temporal notification that will be removed after October 7th
+        # https://github.com/readthedocs/readthedocs.org/pull/11514
+
         # Update build state: installing
-        assert self.requests_mock.request_history[5].json() == {
+        assert self.requests_mock.request_history[6].json() == {
             "id": 1,
             "state": "installing",
             "commit": "a1b2c3",
@@ -524,7 +572,7 @@ class TestBuildTask(BuildEnvironmentBase):
                     },
                     "tools": {
                         "python": {
-                            "full_version": "3.12.0",
+                            "full_version": "3.12.3",
                             "version": "3",
                         }
                     },
@@ -554,7 +602,7 @@ class TestBuildTask(BuildEnvironmentBase):
             },
         }
         # Update build state: building
-        assert self.requests_mock.request_history[6].json() == {
+        assert self.requests_mock.request_history[7].json() == {
             "id": 1,
             "state": "building",
             "commit": "a1b2c3",
@@ -564,7 +612,7 @@ class TestBuildTask(BuildEnvironmentBase):
             "error": "",
         }
         # Update build state: uploading
-        assert self.requests_mock.request_history[7].json() == {
+        assert self.requests_mock.request_history[8].json() == {
             "id": 1,
             "state": "uploading",
             "commit": "a1b2c3",
@@ -574,9 +622,9 @@ class TestBuildTask(BuildEnvironmentBase):
             "error": "",
         }
         # Update version state
-        assert self.requests_mock.request_history[8]._request.method == "PATCH"
-        assert self.requests_mock.request_history[8].path == "/api/v2/version/1/"
-        assert self.requests_mock.request_history[8].json() == {
+        assert self.requests_mock.request_history[9]._request.method == "PATCH"
+        assert self.requests_mock.request_history[9].path == "/api/v2/version/1/"
+        assert self.requests_mock.request_history[9].json() == {
             "addons": False,
             "build_data": None,
             "built": True,
@@ -586,11 +634,13 @@ class TestBuildTask(BuildEnvironmentBase):
             "has_htmlzip": True,
         }
         # Set project has valid clone
-        assert self.requests_mock.request_history[9]._request.method == "PATCH"
-        assert self.requests_mock.request_history[9].path == "/api/v2/project/1/"
-        assert self.requests_mock.request_history[9].json() == {"has_valid_clone": True}
-        # Update build state: finished, success and builder
+        assert self.requests_mock.request_history[10]._request.method == "PATCH"
+        assert self.requests_mock.request_history[10].path == "/api/v2/project/1/"
         assert self.requests_mock.request_history[10].json() == {
+            "has_valid_clone": True
+        }
+        # Update build state: finished, success and builder
+        assert self.requests_mock.request_history[11].json() == {
             "id": 1,
             "state": "finished",
             "commit": "a1b2c3",
@@ -602,8 +652,8 @@ class TestBuildTask(BuildEnvironmentBase):
             "error": "",
         }
 
-        assert self.requests_mock.request_history[11]._request.method == "POST"
-        assert self.requests_mock.request_history[11].path == "/api/v2/revoke/"
+        assert self.requests_mock.request_history[12]._request.method == "POST"
+        assert self.requests_mock.request_history[12].path == "/api/v2/revoke/"
 
         assert BuildData.objects.all().exists()
 
@@ -798,7 +848,6 @@ class TestBuildTask(BuildEnvironmentBase):
                     record=False,
                 ),
                 mock.call("git", "checkout", "--force", "origin/a1b2c3"),
-                mock.call("git", "clean", "-d", "-f", "-f"),
                 mock.call(
                     "git",
                     "ls-remote",

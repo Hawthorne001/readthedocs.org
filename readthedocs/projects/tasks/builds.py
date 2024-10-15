@@ -5,10 +5,12 @@ This includes fetching repository code, cleaning ``conf.py`` files, and
 rebuilding documentation.
 """
 import os
+import shutil
 import signal
 import socket
 import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import structlog
 from celery import Task
@@ -40,6 +42,7 @@ from readthedocs.builds.signals import build_complete
 from readthedocs.builds.utils import memcache_lock
 from readthedocs.config.config import BuildConfigV2
 from readthedocs.config.exceptions import ConfigError
+from readthedocs.core.utils.filesystem import assert_path_is_inside_docroot
 from readthedocs.doc_builder.director import BuildDirector
 from readthedocs.doc_builder.environments import (
     DockerBuildEnvironment,
@@ -53,6 +56,7 @@ from readthedocs.doc_builder.exceptions import (
     MkDocsYAMLParseError,
 )
 from readthedocs.projects.models import Feature
+from readthedocs.projects.notifications import MESSAGE_PROJECT_ADDONS_BY_DEFAULT
 from readthedocs.storage import build_media_storage
 from readthedocs.telemetry.collectors import BuildDataCollector
 from readthedocs.telemetry.tasks import save_build_data
@@ -233,12 +237,7 @@ class SyncRepositoryTask(SyncRepositoryMixin, Task):
                 verbose_name=self.data.version.verbose_name,
                 version_type=self.data.version.type,
             )
-            if not vcs_repository.supports_lsremote:
-                log.info("Syncing repository via full clone.")
-                vcs_repository.update()
-            else:
-                log.info("Syncing repository via remote listing.")
-
+            log.info("Syncing repository via remote listing.")
             self.sync_versions(vcs_repository)
 
 
@@ -430,7 +429,7 @@ class UpdateDocsTask(SyncRepositoryMixin, Task):
         # once we don't need to rely on `self.data.project`.
         if self.data.project.has_feature(Feature.SCALE_IN_PROTECTION):
             set_builder_scale_in_protection.delay(
-                instance=socket.gethostname(),
+                builder=socket.gethostname(),
                 protected_from_scale_in=True,
             )
 
@@ -610,7 +609,8 @@ class UpdateDocsTask(SyncRepositoryMixin, Task):
             # These output format does not support multiple files yet.
             # In case multiple files are found, the upload for this format is not performed.
             if artifact_type in ARTIFACT_TYPES_WITHOUT_MULTIPLE_FILES_SUPPORT:
-                artifact_format_files = len(os.listdir(artifact_directory))
+                list_dir = os.listdir(artifact_directory)
+                artifact_format_files = len(list_dir)
                 if artifact_format_files > 1:
                     log.error(
                         "Multiple files are not supported for this format. "
@@ -630,6 +630,18 @@ class UpdateDocsTask(SyncRepositoryMixin, Task):
                             "artifact_type": artifact_type,
                         },
                     )
+
+                # Rename file as "<project_slug>-<version_slug>.<artifact_type>",
+                # which is the filename that Proxito serves for offline formats.
+                filename = list_dir[0]
+                _, extension = filename.rsplit(".")
+                path = Path(artifact_directory) / filename
+                destination = (
+                    Path(artifact_directory) / f"{self.data.project.slug}.{extension}"
+                )
+                assert_path_is_inside_docroot(path)
+                assert_path_is_inside_docroot(destination)
+                shutil.move(path, destination)
 
             # If all the conditions were met, the artifact is valid
             valid_artifacts.append(artifact_type)
@@ -746,7 +758,7 @@ class UpdateDocsTask(SyncRepositoryMixin, Task):
         # Disable scale-in protection on this instance
         if self.data.project.has_feature(Feature.SCALE_IN_PROTECTION):
             set_builder_scale_in_protection.delay(
-                instance=socket.gethostname(),
+                builder=socket.gethostname(),
                 protected_from_scale_in=False,
             )
 
@@ -808,6 +820,12 @@ class UpdateDocsTask(SyncRepositoryMixin, Task):
                     self.update_build(state=BUILD_STATE_BUILDING)
                     self.data.build_director.run_build_commands()
                 else:
+                    # Temporal notification while we migrate to addons enabled by default.
+                    if self.data.build_director.is_type_sphinx():
+                        self.data.build_director.attach_notification(
+                            MESSAGE_PROJECT_ADDONS_BY_DEFAULT
+                        )
+
                     # Installing
                     self.update_build(state=BUILD_STATE_INSTALLING)
                     self.data.build_director.setup_environment()

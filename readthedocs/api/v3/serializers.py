@@ -11,7 +11,9 @@ from rest_flex_fields.serializers import FlexFieldsSerializerMixin
 from rest_framework import serializers
 from taggit.serializers import TaggitSerializer, TagListSerializerField
 
+from readthedocs.builds.constants import LATEST, STABLE
 from readthedocs.builds.models import Build, Version
+from readthedocs.core.permissions import AdminPermission
 from readthedocs.core.resolver import Resolver
 from readthedocs.core.utils import slugify
 from readthedocs.core.utils.extend import SettingsOverrideObject
@@ -322,13 +324,15 @@ class VersionURLsSerializer(BaseLinksSerializer, serializers.Serializer):
     dashboard = VersionDashboardURLsSerializer(source="*")
 
     def get_documentation(self, obj):
-        return Resolver().resolve_version(
+        resolver = getattr(self.parent, "resolver", Resolver())
+        return resolver.resolve_version(
             project=obj.project,
             version=obj,
         )
 
 
 class VersionSerializer(FlexFieldsModelSerializer):
+    aliases = serializers.SerializerMethodField()
     ref = serializers.CharField()
     downloads = serializers.SerializerMethodField()
     urls = VersionURLsSerializer(source="*")
@@ -337,6 +341,7 @@ class VersionSerializer(FlexFieldsModelSerializer):
     class Meta:
         model = Version
         fields = [
+            "aliases",
             "id",
             "slug",
             "verbose_name",
@@ -354,6 +359,17 @@ class VersionSerializer(FlexFieldsModelSerializer):
 
         expandable_fields = {"last_build": (BuildSerializer,)}
 
+    def __init__(self, *args, resolver=None, version_serializer=None, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Use a shared resolver to reduce the amount of DB queries while
+        # resolving version URLs.
+        self.resolver = kwargs.pop("resolver", Resolver())
+
+        # Allow passing a specific serializer when initializing it.
+        # This is required to pass ``VersionSerializerNoLinks`` from the addons API.
+        self.version_serializer = version_serializer or VersionSerializer
+
     def get_downloads(self, obj):
         downloads = obj.get_downloads()
         data = {}
@@ -367,6 +383,16 @@ class VersionSerializer(FlexFieldsModelSerializer):
                 data[k] = ("http:" if settings.DEBUG else "https:") + v
 
         return data
+
+    def get_aliases(self, obj):
+        if obj.machine and obj.slug in (STABLE, LATEST):
+            if obj.slug == STABLE:
+                alias_version = obj.project.get_original_stable_version()
+            if obj.slug == LATEST:
+                alias_version = obj.project.get_original_latest_version()
+            if alias_version and alias_version.active:
+                return [self.version_serializer(alias_version).data]
+        return []
 
 
 class VersionUpdateSerializer(serializers.ModelSerializer):
@@ -426,10 +452,12 @@ class ProjectURLsSerializer(BaseLinksSerializer, serializers.Serializer):
 
     """Serializer with all the user-facing URLs under Read the Docs."""
 
-    documentation = serializers.CharField(source="get_docs_url")
+    documentation = serializers.SerializerMethodField()
+
     home = serializers.SerializerMethodField()
     builds = serializers.SerializerMethodField()
     versions = serializers.SerializerMethodField()
+    downloads = serializers.SerializerMethodField()
 
     def get_home(self, obj):
         path = reverse("projects_detail", kwargs={"project_slug": obj.slug})
@@ -442,6 +470,15 @@ class ProjectURLsSerializer(BaseLinksSerializer, serializers.Serializer):
     def get_versions(self, obj):
         path = reverse("project_version_list", kwargs={"project_slug": obj.slug})
         return self._absolute_url(path)
+
+    def get_downloads(self, obj):
+        path = reverse("project_downloads", kwargs={"project_slug": obj.slug})
+        return self._absolute_url(path)
+
+    def get_documentation(self, obj):
+        version_slug = getattr(self.parent, "version_slug", None)
+        resolver = getattr(self.parent, "resolver", Resolver())
+        return obj.get_docs_url(version_slug=version_slug, resolver=resolver)
 
 
 class RepositorySerializer(serializers.Serializer):
@@ -463,6 +500,7 @@ class ProjectLinksSerializer(BaseLinksSerializer):
     superproject = serializers.SerializerMethodField()
     translations = serializers.SerializerMethodField()
     notifications = serializers.SerializerMethodField()
+    sync_versions = serializers.SerializerMethodField()
 
     def get__self(self, obj):
         path = reverse("projects-detail", kwargs={"project_slug": obj.slug})
@@ -516,6 +554,15 @@ class ProjectLinksSerializer(BaseLinksSerializer):
     def get_superproject(self, obj):
         path = reverse(
             "projects-superproject",
+            kwargs={
+                "project_slug": obj.slug,
+            },
+        )
+        return self._absolute_url(path)
+
+    def get_sync_versions(self, obj):
+        path = reverse(
+            "projects-sync-versions",
             kwargs={
                 "project_slug": obj.slug,
             },
@@ -596,6 +643,7 @@ class ProjectCreateSerializerBase(TaggitSerializer, FlexFieldsModelSerializer):
 
     def validate(self, data):  # pylint: disable=arguments-renamed
         repo = data.get("repo")
+        user = self.context["request"].user
         try:
             # We are looking for an exact match of the repository URL entered
             # by the user and any of the known URLs (ssh, clone, html) we have
@@ -604,7 +652,9 @@ class ProjectCreateSerializerBase(TaggitSerializer, FlexFieldsModelSerializer):
             # If the `RemoteRepository` is found, we save it to link with
             # `Project` object after performing its creating.
             query = Q(ssh_url=repo) | Q(clone_url=repo) | Q(html_url=repo)
-            remote_repository = RemoteRepository.objects.get(query)
+            remote_repository = RemoteRepository.objects.for_project_linking(user).get(
+                query
+            )
             data.update(
                 {
                     "remote_repository": remote_repository,
@@ -679,6 +729,14 @@ class ProjectUpdateSerializer(SettingsOverrideObject):
     _default_class = ProjectUpdateSerializerBase
 
 
+class ProjectPermissionSerializer(serializers.Serializer):
+    admin = serializers.SerializerMethodField()
+
+    def get_admin(self, obj):
+        user = self.context.get("request").user
+        return AdminPermission.is_admin(user, obj)
+
+
 class ProjectSerializer(FlexFieldsModelSerializer):
 
     """
@@ -742,29 +800,37 @@ class ProjectSerializer(FlexFieldsModelSerializer):
 
         expandable_fields = {
             # NOTE: this has to be a Model method, can't be a
-            # ``SerializerMethodField`` as far as I know
+            # ``SerializerMethodField`` as far as I know.
+            # NOTE: this lists public versions only.
             "active_versions": (
                 VersionSerializer,
                 {
                     "many": True,
                 },
             ),
+            # NOTE: we use a serializer without expandable fields to avoid
+            # leaking information about the organization through the project.
             "organization": (
                 "readthedocs.api.v3.serializers.OrganizationSerializer",
                 # NOTE: we cannot have a Project with multiple organizations.
                 {"source": "organizations.first"},
             ),
-            "teams": (
-                serializers.SlugRelatedField,
+            "permissions": (
+                ProjectPermissionSerializer,
                 {
-                    "slug_field": "slug",
-                    "many": True,
-                    "read_only": True,
+                    "source": "*",
                 },
             ),
         }
 
     def __init__(self, *args, **kwargs):
+        # Receive a `Version.slug` here to build URLs properly
+        self.version_slug = kwargs.pop("version_slug", None)
+
+        # Use a shared resolver to reduce the amount of DB queries while
+        # resolving version URLs.
+        self.resolver = kwargs.pop("resolver", Resolver())
+
         super().__init__(*args, **kwargs)
         # When using organizations, projects don't have the concept of users.
         # But we have organization.owners.
@@ -1122,7 +1188,7 @@ class TeamSerializer(FlexFieldsModelSerializer):
         }
 
 
-class OrganizationSerializer(FlexFieldsModelSerializer):
+class OrganizationSerializer(serializers.ModelSerializer):
     created = serializers.DateTimeField(source="pub_date")
     modified = serializers.DateTimeField(source="modified_date")
     owners = UserSerializer(many=True)
@@ -1143,11 +1209,6 @@ class OrganizationSerializer(FlexFieldsModelSerializer):
             "disabled",
             "_links",
         )
-
-        expandable_fields = {
-            "projects": (ProjectSerializer, {"many": True}),
-            "teams": (TeamSerializer, {"many": True}),
-        }
 
 
 class RemoteOrganizationSerializer(serializers.ModelSerializer):

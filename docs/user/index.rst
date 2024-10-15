@@ -7,10 +7,10 @@ Read the Docs: documentation simplified
    :caption: Getting started
 
    /tutorial/index
-   /choosing-a-site
-   /intro/getting-started-with-sphinx
-   /intro/getting-started-with-mkdocs
-   /intro/import-guide
+   /intro/doctools
+   /intro/mkdocs
+   /intro/sphinx
+   /intro/add-project
    /examples
 
 .. toctree::
@@ -22,6 +22,7 @@ Read the Docs: documentation simplified
    /config-file/v2
    /automation-rules
    /guides/reproducible-builds
+   /addons
 
 .. toctree::
    :maxdepth: 2
@@ -69,7 +70,8 @@ Read the Docs: documentation simplified
    :caption: Maintaining projects
 
    /user-defined-redirects
-   /reference/analytics
+   /traffic-analytics
+   /search-analytics
    /security-log
    /badges
    /explanation/documentation-structure
@@ -86,6 +88,7 @@ Read the Docs: documentation simplified
    /commercial/single-sign-on
    /commercial/sharing
    /commercial/subscriptions
+   /commercial/privacy-level
 
 .. toctree::
    :maxdepth: 2
@@ -111,6 +114,7 @@ Read the Docs: documentation simplified
    /changelog
    /about/index
    Developer Documentation <https://dev.readthedocs.io>
+   Read the Docs website <https://about.readthedocs.com>
 
 .. meta::
    :description lang=en: Automate building, versioning, and hosting of your technical documentation continuously on Read the Docs.
@@ -143,7 +147,7 @@ Open source and user focused
     |org_brand| hosts documentation for over 100,000 large
     and small open source projects.
     |com_brand| supports hundreds of organizations with product and internal documentation.
-    Learn more about :doc:`our two platforms </choosing-a-site>`.
+    Learn more about these differences on `the pricing page <https://about.readthedocs.com/pricing/>`_.
 
 First time here?
 ----------------
@@ -154,9 +158,6 @@ We have a few places for you to get started:
 
 :doc:`/tutorial/index`
   Take the first practical steps with Read the Docs.
-
-:doc:`/choosing-a-site`
-  Learn about the differences between |org_brand| and |com_brand|.
 
 :doc:`/examples`
   Start your journey with an example project to hit the ground running.
@@ -198,7 +199,7 @@ Learn more about our hosting features:
   Host your documentation in multiple languages.
 
 :doc:`/versioning-schemes`
-  Learn about different versioning schemes.
+  Learn about different URL versioning schemes.
 
 :doc:`/custom-domains`
   Host your documentation on your own domain.
@@ -211,7 +212,7 @@ Keep your documentation up to date:
 :doc:`/user-defined-redirects`
   Redirect your old URLs to new ones.
 
-:doc:`/reference/analytics`
+:doc:`/traffic-analytics`
   Learn more about how users are interacting with your documentation.
 
 :doc:`/security-log`
@@ -222,14 +223,14 @@ Business features
 
 Features for organizations and businesses:
 
-:doc:`/commercial/index`
-  Learn more about our commercial features.
-
 :doc:`/commercial/organizations`
   Learn how to manage your organization on Read the Docs.
 
 :doc:`/commercial/single-sign-on`
   Learn how to use single sign-on with Read the Docs.
+
+:doc:`/commercial/sharing`
+  Learn how to share your documentation with others.
 
 How-to guides
 -------------
@@ -238,9 +239,6 @@ Step-by-step guides for common tasks:
 
 :doc:`/guides/pull-requests`
   Setup pull request builds and enjoy previews of each commit.
-
-:doc:`/analytics`
-  Learn more about how users are interacting with your documentation.
 
 :doc:`/guides/cross-referencing-with-sphinx`
   Learn how to use cross-references in a Sphinx project.

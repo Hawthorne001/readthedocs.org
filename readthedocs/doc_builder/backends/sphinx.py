@@ -264,20 +264,21 @@ class BaseSphinx(BaseBuilder):
                 },
             )
 
-        # Allow symlinks, but only the ones that resolve inside the base directory.
-        # NOTE: if something goes wrong,
-        # `safe_open` raises an exception that's clearly communicated to the user.
-        outfile = safe_open(
-            self.config_file, "a", allow_symlinks=True, base_path=self.project_path
-        )
+        if not self.project.has_feature(Feature.DISABLE_SPHINX_MANIPULATION):
+            # Allow symlinks, but only the ones that resolve inside the base directory.
+            # NOTE: if something goes wrong,
+            # `safe_open` raises an exception that's clearly communicated to the user.
+            outfile = safe_open(
+                self.config_file, "a", allow_symlinks=True, base_path=self.project_path
+            )
 
-        # Append config to project conf file
-        tmpl = template_loader.get_template("doc_builder/conf.py.tmpl")
-        rendered = tmpl.render(self.get_config_params())
+            # Append config to project conf file
+            tmpl = template_loader.get_template("doc_builder/conf.py.tmpl")
+            rendered = tmpl.render(self.get_config_params())
 
-        with outfile:
-            outfile.write("\n")
-            outfile.write(rendered)
+            with outfile:
+                outfile.write("\n")
+                outfile.write(rendered)
 
         # Print the contents of conf.py in order to make the rendered
         # configfile visible in the build logs
@@ -358,6 +359,15 @@ class SingleHtmlBuilder(HtmlBuilder):
 class LocalMediaBuilder(BaseSphinx):
     sphinx_builder = "readthedocssinglehtmllocalmedia"
     relative_output_dir = "htmlzip"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # The builder `readthedocssinglehtmllocalmedia` is defined by our
+        # `readthedocs-sphinx-ext` extension that we are not installing
+        # anymore; so we want to use the default Sphinx `singlehtml` builder
+        if self.project.has_feature(Feature.DISABLE_SPHINX_MANIPULATION):
+            self.sphinx_builder = "singlehtml"
 
     def _post_build(self):
         """Internal post build to create the ZIP file from the HTML output."""

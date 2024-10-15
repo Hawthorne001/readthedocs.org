@@ -36,6 +36,7 @@ from readthedocs.core.resolver import Resolver
 from readthedocs.core.utils import extract_valid_attributes_for_model, slugify
 from readthedocs.core.utils.url import unsafe_join_url_path
 from readthedocs.domains.querysets import DomainQueryset
+from readthedocs.domains.validators import check_domains_limit
 from readthedocs.notifications.models import Notification as NewNotification
 from readthedocs.projects import constants
 from readthedocs.projects.exceptions import ProjectConfigurationError
@@ -61,8 +62,8 @@ from readthedocs.storage import build_media_storage
 from readthedocs.vcs_support.backends import backend_cls
 
 from .constants import (
-    ADDONS_FLYOUT_SORTING_ALPHABETICALLY,
     ADDONS_FLYOUT_SORTING_CHOICES,
+    ADDONS_FLYOUT_SORTING_SEMVER_READTHEDOCS_COMPATIBLE,
     DOWNLOADABLE_MEDIA_TYPES,
     MEDIA_TYPES,
     MULTIPLE_VERSIONS_WITH_TRANSLATIONS,
@@ -110,9 +111,6 @@ class ProjectRelationship(models.Model):
     )
 
     objects = ChildRelatedProjectQuerySet.as_manager()
-
-    def __str__(self):
-        return "{} -> {}".format(self.parent, self.child)
 
     def save(self, *args, **kwargs):
         if not self.alias:
@@ -189,8 +187,9 @@ class AddonsConfig(TimeStampedModel):
     # Flyout
     flyout_enabled = models.BooleanField(default=True)
     flyout_sorting = models.CharField(
+        verbose_name=_("Sorting of versions"),
         choices=ADDONS_FLYOUT_SORTING_CHOICES,
-        default=ADDONS_FLYOUT_SORTING_ALPHABETICALLY,
+        default=ADDONS_FLYOUT_SORTING_SEMVER_READTHEDOCS_COMPATIBLE,
         max_length=64,
     )
     flyout_sorting_custom_pattern = models.CharField(
@@ -198,12 +197,15 @@ class AddonsConfig(TimeStampedModel):
         default=None,
         null=True,
         blank=True,
+        verbose_name=_("Custom version sorting pattern"),
         help_text="Sorting pattern supported by BumpVer "
         '(<a href="https://github.com/mbarkhau/bumpver#pattern-examples">See examples</a>)',
     )
     flyout_sorting_latest_stable_at_beginning = models.BooleanField(
+        verbose_name=_(
+            "Show <code>latest</code> and <code>stable</code> at the beginning"
+        ),
         default=True,
-        help_text="Show <code>latest</code> and <code>stable</code> at the beginning",
     )
 
     # Hotkeys
@@ -260,7 +262,7 @@ class Project(models.Model):
         _("Repository URL"),
         max_length=255,
         validators=[validate_repository_url],
-        help_text=_("Hosted documentation repository URL"),
+        help_text=_("Git repository URL"),
         db_index=True,
     )
 
@@ -283,16 +285,17 @@ class Project(models.Model):
         help_text=_("URL that documentation is expected to serve from"),
     )
     versioning_scheme = models.CharField(
-        _("Versioning scheme"),
+        _("URL versioning scheme"),
         max_length=120,
         default=constants.MULTIPLE_VERSIONS_WITH_TRANSLATIONS,
         choices=constants.VERSIONING_SCHEME_CHOICES,
         # TODO: remove after migration
         null=True,
         help_text=_(
-            "This affects how the URL of your documentation looks like, "
-            "and if it supports translations or multiple versions. "
-            "Changing the versioning scheme will break your current URLs."
+            "This affects URL your documentation is served from, "
+            "and if it supports translations or versions. "
+            "Changing the versioning scheme will break your current URLs, "
+            "so you might need to create a redirect."
         ),
     )
     # TODO: this field is deprecated, use `versioning_scheme` instead.
@@ -542,6 +545,8 @@ class Project(models.Model):
 
     remote_repository = models.ForeignKey(
         "oauth.RemoteRepository",
+        verbose_name=_("Connected repository"),
+        help_text=_("Repository connected to this project"),
         on_delete=models.SET_NULL,
         related_name="projects",
         null=True,
@@ -635,13 +640,21 @@ class Project(models.Model):
     def get_absolute_url(self):
         return reverse("projects_detail", args=[self.slug])
 
-    def get_docs_url(self, version_slug=None, lang_slug=None, external=False):
+    def get_docs_url(
+        self,
+        version_slug=None,
+        lang_slug=None,
+        external=False,
+        resolver=None,
+    ):
         """
         Return a URL for the docs.
 
-        ``external`` defaults False because we only link external versions in very specific places
+        ``external`` defaults False because we only link external versions in very specific places.
+        ``resolver`` is used to "share a resolver" between the same request.
         """
-        return Resolver().resolve(
+        resolver = resolver or Resolver()
+        return resolver.resolve(
             project=self,
             version_slug=version_slug,
             language=lang_slug,
@@ -1237,7 +1250,10 @@ class Project(models.Model):
         if self.remote_repository and self.remote_repository.default_branch:
             return self.remote_repository.default_branch
 
-        return self.vcs_class().fallback_branch
+        vcs_class = self.vcs_class()
+        if vcs_class:
+            return vcs_class.fallback_branch
+        return "Unknown"
 
     def add_subproject(self, child, alias=None):
         subproject, _ = ProjectRelationship.objects.get_or_create(
@@ -1498,9 +1514,6 @@ class ImportedFile(models.Model):
             filename=self.path,
         )
 
-    def __str__(self):
-        return "{}: {}".format(self.name, self.project)
-
 
 class HTMLFile(ImportedFile):
 
@@ -1688,9 +1701,6 @@ class WebHook(Notification):
         )
         return digest.hexdigest()
 
-    def __str__(self):
-        return f"{self.project.slug} {self.url}"
-
 
 class Domain(TimeStampedModel):
 
@@ -1782,10 +1792,7 @@ class Domain(TimeStampedModel):
         ordering = ("-canonical", "-machine", "domain")
 
     def __str__(self):
-        return "{domain} pointed at {project}".format(
-            domain=self.domain,
-            project=self.project.name,
-        )
+        return self.domain
 
     @property
     def is_valid(self):
@@ -1806,6 +1813,9 @@ class Domain(TimeStampedModel):
         if not self.is_valid and self.validation_process_expired:
             self.validation_process_start = timezone.now()
             self.save()
+
+    def clean(self):
+        check_domains_limit(self.project)
 
     def save(self, *args, **kwargs):
         parsed = urlparse(self.domain)
@@ -1856,7 +1866,7 @@ class HTTPHeader(TimeStampedModel, models.Model):
     )
 
     def __str__(self):
-        return f"HttpHeader: {self.name} on {self.domain.domain}"
+        return self.name
 
 
 class Feature(models.Model):
@@ -1877,7 +1887,6 @@ class Feature(models.Model):
 
     # Feature constants - this is not a exhaustive list of features, features
     # may be added by other packages
-    MKDOCS_THEME_RTD = "mkdocs_theme_rtd"
     API_LARGE_DATA = "api_large_data"
     CONDA_APPEND_CORE_REQUIREMENTS = "conda_append_core_requirements"
     ALL_VERSIONS_IN_HTML_CONTEXT = "all_versions_in_html_context"
@@ -1898,6 +1907,7 @@ class Feature(models.Model):
     DONT_INSTALL_LATEST_PIP = "dont_install_latest_pip"
     USE_SPHINX_RTD_EXT_LATEST = "rtd_sphinx_ext_latest"
     INSTALL_LATEST_CORE_REQUIREMENTS = "install_latest_core_requirements"
+    DISABLE_SPHINX_MANIPULATION = "disable_sphinx_manipulation"
 
     # Search related features
     DISABLE_SERVER_SIDE_SEARCH = "disable_server_side_search"
@@ -1908,10 +1918,6 @@ class Feature(models.Model):
     SCALE_IN_PROTECTION = "scale_in_prtection"
 
     FEATURES = (
-        (
-            MKDOCS_THEME_RTD,
-            _("MkDocs: Use Read the Docs theme for MkDocs as default theme"),
-        ),
         (
             API_LARGE_DATA,
             _("Build: Try alternative method of posting large data"),
@@ -1979,6 +1985,12 @@ class Feature(models.Model):
                 "Build: Install all the latest versions of Read the Docs core requirements"
             ),
         ),
+        (
+            DISABLE_SPHINX_MANIPULATION,
+            _(
+                "Sphinx: Don't append `conf.py` and don't install ``readthedocs-sphinx-ext``"
+            ),
+        ),
         # Search related features.
         (
             DISABLE_SERVER_SIDE_SEARCH,
@@ -2030,9 +2042,7 @@ class Feature(models.Model):
     objects = FeatureQuerySet.as_manager()
 
     def __str__(self):
-        return "{} feature".format(
-            self.get_feature_display(),
-        )
+        return self.get_feature_display()
 
     def get_feature_display(self):
         """
@@ -2041,7 +2051,7 @@ class Feature(models.Model):
         Because the field is not a ChoiceField here, we need to manually
         implement this behavior.
         """
-        return dict(self.FEATURES).get(self.feature_id, self.feature_id)
+        return str(dict(self.FEATURES).get(self.feature_id, self.feature_id))
 
 
 class EnvironmentVariable(TimeStampedModel, models.Model):

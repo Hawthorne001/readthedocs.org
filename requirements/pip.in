@@ -7,9 +7,8 @@ django-extensions
 django-polymorphic
 django-autoslug
 
-# NOTE: we cannot use ``psycopg`` (3.x), even if it's supported by Django 4.2
-# because New Relic agent is not sending the data of the database to their servers.
-psycopg2
+# https://www.psycopg.org/psycopg3/docs/basic/install.html
+psycopg[binary,pool]
 
 # 3.1.0 includes changes that require running `makemigrations`
 # https://django-simple-history.readthedocs.io/en/latest/#changes
@@ -38,7 +37,10 @@ jsonfield
 
 django-safemigrate
 
-requests
+# The latest version of requests isn't compatible with the
+# version of the docker-py library we're using.
+# See https://github.com/docker/docker-py/issues/3256.
+requests==2.30.0
 requests-toolbelt
 slumber
 pyyaml
@@ -82,9 +84,9 @@ django-celery-beat
 # TODO: remove this dependency once we upgrade Celery. It should auto-install it.
 tzdata
 
-# 0.58.0 refactored the built-in templates,
-# we need to check if we need to update our custom templates.
-django-allauth==0.57.2
+# We need to update some 2FA templates to update to 65+
+# https://github.com/readthedocs/ext-theme/issues/501
+django-allauth[socialaccount,saml,mfa]<65
 
 requests-oauthlib
 
@@ -152,7 +154,10 @@ django-cors-headers
 # User agent parsing - used for analytics purposes
 user-agents
 
-django-storages[boto3]
+# Pinned because we need to remove the usage of
+# `get_available_overwrite_name` first
+# See https://github.com/readthedocs/readthedocs.org/pull/11505
+django-storages[boto3]==1.14.3
 
 
 # Required only in development and linting

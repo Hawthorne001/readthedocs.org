@@ -14,8 +14,10 @@ from corsheaders.defaults import default_headers
 from readthedocs.core.settings import Settings
 from readthedocs.builds import constants_docker
 
+from django.conf.global_settings import PASSWORD_HASHERS
+
 try:
-    import readthedocsext  # noqa
+    import readthedocsext.cdn  # noqa
 
     ext = True
 except ImportError:
@@ -109,7 +111,7 @@ class CommunityBaseSettings(Settings):
         Cookie used in cross-origin API requests from *.rtd.io to rtd.org/api/v2/sustainability/.
         """
         if self.USE_PROMOS:
-            return None
+            return "None"
         # This is django's default.
         return "Lax"
 
@@ -125,7 +127,6 @@ class CommunityBaseSettings(Settings):
 
     # Content Security Policy
     # https://django-csp.readthedocs.io/
-    CSP_BLOCK_ALL_MIXED_CONTENT = True
     CSP_DEFAULT_SRC = None  # This could be improved
     CSP_FRAME_ANCESTORS = ("'none'",)
     CSP_OBJECT_SRC = ("'none'",)
@@ -169,7 +170,8 @@ class CommunityBaseSettings(Settings):
 
         return dict(
             (
-                RTDProductFeature(type=constants.TYPE_CNAME).to_item(),
+                # Max number of domains allowed per project.
+                RTDProductFeature(type=constants.TYPE_CNAME, value=2).to_item(),
                 RTDProductFeature(type=constants.TYPE_EMBED_API).to_item(),
                 # Retention days for search analytics.
                 RTDProductFeature(
@@ -285,8 +287,8 @@ class CommunityBaseSettings(Settings):
             "allauth.socialaccount",
             "allauth.socialaccount.providers.github",
             "allauth.socialaccount.providers.gitlab",
-            "allauth.socialaccount.providers.bitbucket",
             "allauth.socialaccount.providers.bitbucket_oauth2",
+            "allauth.mfa",
             "cacheops",
         ]
         if ext:
@@ -366,6 +368,10 @@ class CommunityBaseSettings(Settings):
         },
     ]
 
+    # Explicitly set the password hashers to the default ones,
+    # so we can change them in our test settings.
+    PASSWORD_HASHERS = PASSWORD_HASHERS
+
     # Paths
     SITE_ROOT = os.path.dirname(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -382,6 +388,7 @@ class CommunityBaseSettings(Settings):
     MEDIA_ROOT = os.path.join(SITE_ROOT, "media/")
     MEDIA_URL = "/media/"
     ADMIN_MEDIA_PREFIX = "/media/admin/"
+    ADMIN_URL = "/admin"
     STATICFILES_DIRS = [
         os.path.join(SITE_ROOT, "readthedocs", "static"),
         os.path.join(SITE_ROOT, "media"),
@@ -540,11 +547,11 @@ class CommunityBaseSettings(Settings):
                 "delete": True,
             },
         },
-        "every-three-hours-delete-inactive-external-versions": {
+        "every-30m-delete-inactive-external-versions": {
             "task": "readthedocs.builds.tasks.delete_closed_external_versions",
             # Increase the frequency because we have 255k closed versions and they keep growing.
             # It's better to increase this frequency than the `limit=` of the task.
-            "schedule": crontab(minute=0, hour="*/3"),
+            "schedule": crontab(minute="*/30", hour="*"),
             "options": {"queue": "web"},
         },
         "every-day-resync-remote-repositories": {
@@ -656,13 +663,14 @@ class CommunityBaseSettings(Settings):
         )
         return limits
 
-    # All auth
+    # Allauth
     ACCOUNT_ADAPTER = "readthedocs.core.adapters.AccountAdapter"
     ACCOUNT_EMAIL_REQUIRED = True
 
     # Make email verification mandatory.
     # Users won't be able to login until they verify the email address.
     ACCOUNT_EMAIL_VERIFICATION = "mandatory"
+    ACCOUNT_LOGIN_ON_EMAIL_CONFIRMATION = True
 
     ACCOUNT_AUTHENTICATION_METHOD = "username_email"
     ACCOUNT_EMAIL_CONFIRMATION_EXPIRE_DAYS = 7
@@ -697,12 +705,6 @@ class CommunityBaseSettings(Settings):
                 {"client_id": "123", "secret": "456", "key": ""},
             ],
             # Bitbucket scope/permissions are determined by the Oauth consumer setup on bitbucket.org.
-        },
-        # Deprecated, we use `bitbucket_oauth2` for all new connections.
-        "bitbucket": {
-            "APPS": [
-                {"client_id": "123", "secret": "456", "key": ""},
-            ],
         },
     }
 
@@ -852,6 +854,10 @@ class CommunityBaseSettings(Settings):
     # since we have subscriptions attached to an organization or gold user
     # we can't make use of the DJSTRIPE_SUBSCRIBER_MODEL setting.
     DJSTRIPE_SUBSCRIBER_CUSTOMER_KEY = None
+
+    # Webhook URL for BotDog to post messages in Slack #sales channel:
+    # https://api.slack.com/apps/A01ML7J7N4T/incoming-webhooks
+    SLACK_WEBHOOK_SALES_CHANNEL = None  # https://hooks.slack.com/services/...
 
     # Do Not Track support
     DO_NOT_TRACK_ENABLED = False
@@ -1006,6 +1012,7 @@ class CommunityBaseSettings(Settings):
     RTD_SPAM_THRESHOLD_DENY_ON_ROBOTS = 200
     RTD_SPAM_THRESHOLD_DONT_SHOW_DASHBOARD = 300
     RTD_SPAM_THRESHOLD_DONT_SERVE_DOCS = 500
+    RTD_SPAM_THRESHOLD_REMOVE_FROM_SEARCH_INDEX = 500
     RTD_SPAM_THRESHOLD_DELETE_PROJECT = 1000
     RTD_SPAM_MAX_SCORE = 9999
 
